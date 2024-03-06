@@ -1,5 +1,6 @@
 from abc import ABCMeta, abstractmethod
 
+from jormungandr.autodiff import VariableMatrix
 from wpimath.system import LinearSystem
 
 
@@ -23,13 +24,9 @@ class DifferentialDriveCentripetalAccelerationConstraint(TrajectoryConstraint):
         # a = (v_l + v_r) / 2 * (v_r - v_l) / trackwidth
         # a = (v_r + v_l)(v_r - v_l) / (2 trackwidth)
         # a = (v_r² - v_l²) / (2 trackwidth)
-        opti.subject_to(
-            opti.bounded(
-                -self.max_acceleration,
-                (X[4, :] ** 2 - X[3, :] ** 2) / (2 * self.trackwidth),
-                self.max_acceleration,
-            )
-        )
+        a = (X[4, :] ** 2 - X[3, :] ** 2) / (2 * self.trackwidth)
+        opti.subject_to(-self.max_acceleration <= a)
+        opti.subject_to(a <= self.max_acceleration)
 
 
 class DifferentialDriveMaxVelocityConstraint(TrajectoryConstraint):
@@ -38,7 +35,8 @@ class DifferentialDriveMaxVelocityConstraint(TrajectoryConstraint):
 
     def apply(self, opti, X, U) -> None:
         v = (X[3, :] + X[4, :]) / 2
-        opti.subject_to(opti.bounded(-self.max_velocity, v, self.max_velocity))
+        opti.subject_to(-self.max_velocity <= v)
+        opti.subject_to(v <= self.max_velocity)
 
 
 class DifferentialDriveMaxAccelerationConstraint(TrajectoryConstraint):
@@ -49,7 +47,8 @@ class DifferentialDriveMaxAccelerationConstraint(TrajectoryConstraint):
     def apply(self, opti, X, U) -> None:
         dxdt = self.system.A @ X[3:5, :] + self.system.B @ U
         a = (dxdt[0, :] + dxdt[1, :]) / 2
-        opti.subject_to(opti.bounded(-self.max_acceleration, a, self.max_acceleration))
+        opti.subject_to(-self.max_acceleration <= a)
+        opti.subject_to(a <= self.max_acceleration)
 
 
 class BoxObstacleConstraint(TrajectoryConstraint):
@@ -61,13 +60,13 @@ class BoxObstacleConstraint(TrajectoryConstraint):
 
     def apply(self, opti, X, U) -> None:
         import math
-        from casadi import sqrt
+        from jormungandr.autodiff import sqrt
 
         x = X[0, :]
         y = X[1, :]
 
-        x_new = (x - self.center_x) / self.r_x
-        y_new = (y - self.center_y) / self.r_y
+        x_new = (x - VariableMatrix.ones(1, x.shape[1]) * self.center_x) / self.r_x
+        y_new = (y - VariableMatrix.ones(1, y.shape[1]) * self.center_y) / self.r_y
 
         # |x| + |y| > 1
         #
@@ -86,9 +85,12 @@ class BoxObstacleConstraint(TrajectoryConstraint):
         # |x + y| + |y - x| > √2
         # |x + y| + |y - x| > √2
         # √((x + y)²) + √((y − x)²) > √2
-        opti.subject_to(
-            sqrt((x_new + y_new) ** 2) + sqrt((y_new - x_new) ** 2) > math.sqrt(2)
-        )
+        for col in range(x_new.shape[1]):
+            opti.subject_to(
+                sqrt((x_new[0, col] + y_new[0, col]) ** 2)
+                + sqrt((y_new[0, col] - x_new[0, col]) ** 2)
+                > math.sqrt(2)
+            )
 
 
 class CircleObstacleConstraint(TrajectoryConstraint):
@@ -98,7 +100,8 @@ class CircleObstacleConstraint(TrajectoryConstraint):
         self.radius = radius
 
     def apply(self, opti, X, U) -> None:
-        opti.subject_to(
-            (X[0, :] - self.center_x) ** 2 + (X[1, :] - self.center_y) ** 2
-            > self.radius**2
-        )
+        for col in range(X.shape[1]):
+            opti.subject_to(
+                (X[0, col] - self.center_x) ** 2 + (X[1, col] - self.center_y) ** 2
+                > self.radius**2
+            )
